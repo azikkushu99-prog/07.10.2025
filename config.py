@@ -1,0 +1,4 @@
+BOT_TOKEN = "8016284193:AAHMKRib2jFRzfMakic4RwMQg3ppfZxaHLc"
+ADMIN_IDS = [785219206, 5393564230]
+DATABASE_URL = "sqlite:///doors_bot.db"
+MEDIA_FOLDER = "doors"
