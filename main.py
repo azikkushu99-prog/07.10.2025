@@ -12,66 +12,39 @@ from datetime import datetime
 import math
 
 from config import BOT_TOKEN, ADMIN_IDS
-from db import create_tables, SessionLocal, Category, Type, Product, ProductMedia, Cart, Order, OrderItem, \
-    MainMenuSection
+from db import create_tables, SessionLocal, Category, Type, Product, ProductMedia, Cart, Order, OrderItem, MainMenuSection
 from admin import admin_router
-import logging
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-
-# Подключаем админ-роутер
 dp.include_router(admin_router)
 
-# Константы для пагинации
-ITEMS_PER_PAGE = 5
+ITEMS_PER_PAGE = 10
 
-
-# Callback data классы для пагинации
 class CategoryPagination(CallbackData, prefix="cat_pag"):
     page: int
-
 
 class TypePagination(CallbackData, prefix="type_pag"):
     category_id: int
     page: int
 
-
 class ProductPagination(CallbackData, prefix="prod_pag"):
     type_id: int
     page: int
 
-
-# Callback data для навигации по медиа товара
-class ProductMediaNavigation(CallbackData, prefix="prod_media"):
-    product_id: int
-    media_index: int
-    type_id: int
-    page: int
-
-
-# Состояния для оформления заказа
 class OrderState(StatesGroup):
     waiting_for_phone = State()
 
-
-# Состояния для добавления в корзину
 class CartState(StatesGroup):
     waiting_for_quantity = State()
 
-
-# Словари для хранения сообщений
 main_menu_messages = {}
-user_last_messages = {}  # Хранит последние сообщения для каждого пользователя
-
+user_last_messages = {}
 
 async def cleanup_user_messages(chat_id: int, keep_main_menu: bool = True):
-    """Удаляет все сообщения пользователя, кроме главного меню"""
     if chat_id in user_last_messages:
         for msg_id in user_last_messages[chat_id]:
             try:
@@ -87,16 +60,12 @@ async def cleanup_user_messages(chat_id: int, keep_main_menu: bool = True):
             logger.debug(f"Не удалось удалить главное меню: {e}")
         del main_menu_messages[chat_id]
 
-
 def add_user_message(chat_id: int, message_id: int):
-    """Добавляет сообщение в список сообщений пользователя"""
     if chat_id not in user_last_messages:
         user_last_messages[chat_id] = []
     user_last_messages[chat_id].append(message_id)
 
-
 async def update_main_menu(chat_id: int, text: str, reply_markup):
-    """Обновляет главное меню или создает новое"""
     if chat_id in main_menu_messages:
         try:
             await bot.edit_message_text(
@@ -113,11 +82,8 @@ async def update_main_menu(chat_id: int, text: str, reply_markup):
             except:
                 pass
             del main_menu_messages[chat_id]
-
     return False
 
-
-# Создание инлайн-клавиатуры для пользователей
 def get_start_keyboard():
     keyboard = [
         [InlineKeyboardButton(text="📁 Каталог", callback_data="catalog"),
@@ -128,8 +94,6 @@ def get_start_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура для корзины
 def get_cart_keyboard():
     keyboard = [
         [InlineKeyboardButton(text="📋 Просмотр корзины", callback_data="view_cart")],
@@ -138,53 +102,13 @@ def get_cart_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура для товара с навигацией по медиа
-def get_product_keyboard(product_id, type_id, page=0, media_index=0, media_count=1):
-    keyboard = []
-
-    # Кнопки навигации по медиа, если файлов больше одного
-    if media_count > 1:
-        nav_buttons = []
-        if media_index > 0:
-            nav_buttons.append(InlineKeyboardButton(
-                text="⬅️",
-                callback_data=ProductMediaNavigation(
-                    product_id=product_id,
-                    media_index=media_index - 1,
-                    type_id=type_id,
-                    page=page
-                ).pack()
-            ))
-
-        nav_buttons.append(InlineKeyboardButton(
-            text=f"{media_index + 1}/{media_count}",
-            callback_data="current_media"
-        ))
-
-        if media_index < media_count - 1:
-            nav_buttons.append(InlineKeyboardButton(
-                text="➡️",
-                callback_data=ProductMediaNavigation(
-                    product_id=product_id,
-                    media_index=media_index + 1,
-                    type_id=type_id,
-                    page=page
-                ).pack()
-            ))
-
-        keyboard.append(nav_buttons)
-
-    # Основные кнопки действий
-    keyboard.append(
-        [InlineKeyboardButton(text="🛒 Добавить в корзину", callback_data=f"add_to_cart_{product_id}_{page}")])
-    keyboard.append(
-        [InlineKeyboardButton(text="🔙 Назад к товарам", callback_data=f"back_to_products_{type_id}_{page}")])
-
+def get_product_keyboard(product_id, type_id, page=0):
+    keyboard = [
+        [InlineKeyboardButton(text="🛒 Добавить в корзину", callback_data=f"add_to_cart_{product_id}_{page}")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data=f"back_to_products_{type_id}_{page}")]
+    ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура после добавления в корзину
 def get_after_cart_keyboard(type_id, page=0):
     keyboard = [
         [InlineKeyboardButton(text="🔙 Назад к товарам", callback_data=f"back_to_products_{type_id}_{page}")],
@@ -192,16 +116,12 @@ def get_after_cart_keyboard(type_id, page=0):
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура для отмены ввода количества
 def get_cancel_quantity_keyboard(product_id, type_id, page=0):
     keyboard = [
         [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_quantity_{product_id}_{type_id}_{page}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура для просмотра корзины с итоговой суммой
 def get_cart_summary_keyboard():
     keyboard = [
         [InlineKeyboardButton(text="✅ Оформить заказ", callback_data="checkout")],
@@ -210,8 +130,6 @@ def get_cart_summary_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Клавиатура для удаления товара из корзины
 def get_cart_item_keyboard(cart_item_id):
     keyboard = [
         [InlineKeyboardButton(text="❌ Удалить из корзины", callback_data=f"remove_from_cart_{cart_item_id}")],
@@ -219,24 +137,16 @@ def get_cart_item_keyboard(cart_item_id):
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
-
-# Обработчик команды /start
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     chat_id = message.chat.id
-    await cleanup_user_messages(chat_id, False)  # Полная очистка чата
+    await cleanup_user_messages(chat_id, False)
 
-    welcome_text = (
-        "Добро пожаловать в магазин дверей! 🚪\n\n"
-        "Выберите нужный раздел:"
-    )
+    welcome_text = "Добро пожаловать в магазин дверей! 🚪\n\nВыберите нужный раздел:"
 
-    # Создаем главное меню
     msg = await message.answer(welcome_text, reply_markup=get_start_keyboard())
     main_menu_messages[chat_id] = msg.message_id
 
-
-# Обработчик нажатий на инлайн-кнопки (пользовательские)
 @dp.callback_query(F.data.in_(["catalog", "services", "info", "consultation", "cart"]))
 async def handle_callbacks(callback: types.CallbackQuery):
     data = callback.data
@@ -254,24 +164,20 @@ async def handle_callbacks(callback: types.CallbackQuery):
     elif data == "cart":
         await show_cart_menu(callback)
 
-
-# Показать раздел главного меню - ИСПРАВЛЕННАЯ ФУНКЦИЯ
 async def show_main_menu_section(callback: types.CallbackQuery, section_key: str):
     chat_id = callback.message.chat.id
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
         section = db.query(MainMenuSection).filter(MainMenuSection.section_key == section_key).first()
         if not section:
-            # Если раздел не найден, показываем заглушку
             error_text = f"Раздел временно недоступен"
             if not await update_main_menu(chat_id, error_text, get_start_keyboard()):
                 msg = await callback.message.answer(error_text, reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
             return
 
-        # Если есть фото, отправляем его с подписью
         if section.file_id and section.photo_path:
             try:
                 msg = await bot.send_photo(
@@ -282,13 +188,11 @@ async def show_main_menu_section(callback: types.CallbackQuery, section_key: str
                 )
                 add_user_message(chat_id, msg.message_id)
             except Exception as e:
-                # Если не удалось отправить фото, отправляем только текст
                 logger.error(f"Ошибка отправки фото: {e}")
                 if not await update_main_menu(chat_id, section.content, get_start_keyboard()):
                     msg = await callback.message.answer(section.content, reply_markup=get_start_keyboard())
                     main_menu_messages[chat_id] = msg.message_id
         else:
-            # Если фото нет, просто обновляем текст
             if not await update_main_menu(chat_id, section.content, get_start_keyboard()):
                 msg = await callback.message.answer(section.content, reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
@@ -302,28 +206,21 @@ async def show_main_menu_section(callback: types.CallbackQuery, section_key: str
     finally:
         db.close()
 
-
-# Обработчик корзины
 @dp.callback_query(F.data == "cart")
 async def handle_cart(callback: types.CallbackQuery):
     await show_cart_menu(callback)
     await callback.answer()
 
-
-# Показать меню корзины
 async def show_cart_menu(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
 
-    # Обновляем главное меню для показа корзины
     if not await update_main_menu(chat_id, "🛒 Корзина\n\nВыберите действие:", get_cart_keyboard()):
-        # Если не удалось обновить, создаем новое сообщение
         msg = await callback.message.answer("🛒 Корзина\n\nВыберите действие:", reply_markup=get_cart_keyboard())
         main_menu_messages[chat_id] = msg.message_id
 
-# Показать каталог с пагинацией
 async def show_catalog(callback: types.CallbackQuery, page: int = 0):
     chat_id = callback.message.chat.id
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
@@ -344,7 +241,6 @@ async def show_catalog(callback: types.CallbackQuery, page: int = 0):
         for category in current_categories:
             builder.button(text=category.name, callback_data=f"show_category_{category.id}")
 
-        # Добавляем кнопки пагинации
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(
@@ -365,7 +261,6 @@ async def show_catalog(callback: types.CallbackQuery, page: int = 0):
 
         text = f"📁 Выберите категорию:\n\nСтраница {page + 1} из {total_pages}"
 
-        # Обновляем главное меню для показа каталога
         if not await update_main_menu(chat_id, text, builder.as_markup()):
             msg = await callback.message.answer(text, reply_markup=builder.as_markup())
             main_menu_messages[chat_id] = msg.message_id
@@ -373,13 +268,10 @@ async def show_catalog(callback: types.CallbackQuery, page: int = 0):
     finally:
         db.close()
 
-
-# Обработчик пагинации категорий
 @dp.callback_query(CategoryPagination.filter())
 async def handle_category_pagination(callback: types.CallbackQuery, callback_data: CategoryPagination):
     await show_catalog(callback, callback_data.page)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("show_category_"))
 async def show_category_types(callback: types.CallbackQuery):
@@ -387,11 +279,9 @@ async def show_category_types(callback: types.CallbackQuery):
     await show_category_types_page(callback, category_id, 0)
     await callback.answer()
 
-
-# Показать типы категории с пагинацией
 async def show_category_types_page(callback: types.CallbackQuery, category_id: int, page: int = 0):
     chat_id = callback.message.chat.id
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
@@ -399,10 +289,8 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
         types = db.query(Type).filter(Type.category_id == category_id).all()
 
         if not types:
-            if not await update_main_menu(chat_id, f"📁 В категории '{category.name}' пока нет типов",
-                                          get_start_keyboard()):
-                msg = await callback.message.answer(f"📁 В категории '{category.name}' пока нет типов",
-                                                    reply_markup=get_start_keyboard())
+            if not await update_main_menu(chat_id, f"📁 В категории '{category.name}' пока нет типов", get_start_keyboard()):
+                msg = await callback.message.answer(f"📁 В категории '{category.name}' пока нет типов", reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
             return
 
@@ -416,7 +304,6 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
         for type_obj in current_types:
             builder.button(text=type_obj.name, callback_data=f"show_type_{type_obj.id}_0")
 
-        # Кнопки пагинации
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(
@@ -444,13 +331,10 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
     finally:
         db.close()
 
-
-# Обработчик пагинации типов
 @dp.callback_query(TypePagination.filter())
 async def handle_type_pagination(callback: types.CallbackQuery, callback_data: TypePagination):
     await show_category_types_page(callback, callback_data.category_id, callback_data.page)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("show_type_"))
 async def show_type_products(callback: types.CallbackQuery):
@@ -460,11 +344,9 @@ async def show_type_products(callback: types.CallbackQuery):
     await show_type_products_page(callback, type_id, page)
     await callback.answer()
 
-
-# Показать товары типа с пагинацией
 async def show_type_products_page(callback: types.CallbackQuery, type_id: int, page: int = 0):
     chat_id = callback.message.chat.id
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
@@ -472,10 +354,8 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
         products = db.query(Product).filter(Product.type_id == type_id).all()
 
         if not products:
-            if not await update_main_menu(chat_id, f"🚪 В типе '{type_obj.name}' пока нет товаров",
-                                          get_start_keyboard()):
-                msg = await callback.message.answer(f"🚪 В типе '{type_obj.name}' пока нет товаров",
-                                                    reply_markup=get_start_keyboard())
+            if not await update_main_menu(chat_id, f"🚪 В типе '{type_obj.name}' пока нет товаров", get_start_keyboard()):
+                msg = await callback.message.answer(f"🚪 В типе '{type_obj.name}' пока нет товаров", reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
             return
 
@@ -489,7 +369,6 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
         for product in current_products:
             builder.button(text=product.name, callback_data=f"show_product_{product.id}_{type_id}_{page}")
 
-        # Кнопки пагинации
         pagination_buttons = []
         if page > 0:
             pagination_buttons.append(InlineKeyboardButton(
@@ -517,25 +396,20 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
     finally:
         db.close()
 
-
-# Обработчик пагинации товаров
 @dp.callback_query(ProductPagination.filter())
 async def handle_product_pagination(callback: types.CallbackQuery, callback_data: ProductPagination):
     await show_type_products_page(callback, callback_data.type_id, callback_data.page)
     await callback.answer()
 
-
-# Обработчик возврата к списку товаров
 @dp.callback_query(F.data.startswith("back_to_products_"))
 async def back_to_products(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     type_id = int(parts[3])
     page = int(parts[4]) if len(parts) > 4 else 0
 
-    await cleanup_user_messages(callback.message.chat.id)  # Очищаем чат
+    await cleanup_user_messages(callback.message.chat.id)
     await show_type_products_page(callback, type_id, page)
     await callback.answer()
-
 
 @dp.callback_query(F.data.startswith("show_product_"))
 async def show_product_details(callback: types.CallbackQuery):
@@ -545,15 +419,12 @@ async def show_product_details(callback: types.CallbackQuery):
     type_id = int(parts[3])
     page = int(parts[4]) if len(parts) > 4 else 0
 
-    # Показываем первый медиафайл товара
-    await show_product_media(callback, product_id, type_id, page, 0)
+    await show_product_media(callback, product_id, type_id, page)
     await callback.answer()
 
-
-# Показать конкретный медиафайл товара с навигацией
-async def show_product_media(callback: types.CallbackQuery, product_id: int, type_id: int, page: int, media_index: int):
+async def show_product_media(callback: types.CallbackQuery, product_id: int, type_id: int, page: int):
     chat_id = callback.message.chat.id
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
@@ -564,54 +435,53 @@ async def show_product_media(callback: types.CallbackQuery, product_id: int, typ
             await callback.answer("❌ Товар не найден")
             return
 
-        if not media_files:
-            # Если нет медиафайлов, показываем просто текст с кнопками
-            product_text = f"🚪 {product.name}\n\n💰 Цена: {product.price} руб.\n\n📝 {product.description}"
+        product_text = f"🚪 {product.name}\n\n💰 Цена: {product.price} руб.\n\n📝 {product.description}"
 
+        if media_files:
+            media_group = []
+            for i, media_file in enumerate(media_files):
+                if media_file.media_type == 'photo':
+                    if i == 0:
+                        media_group.append(types.InputMediaPhoto(
+                            media=media_file.file_id,
+                            caption=product_text
+                        ))
+                    else:
+                        media_group.append(types.InputMediaPhoto(
+                            media=media_file.file_id
+                        ))
+                else:
+                    if i == 0:
+                        media_group.append(types.InputMediaVideo(
+                            media=media_file.file_id,
+                            caption=product_text
+                        ))
+                    else:
+                        media_group.append(types.InputMediaVideo(
+                            media=media_file.file_id
+                        ))
+
+            messages = await bot.send_media_group(chat_id=chat_id, media=media_group)
+            for msg in messages:
+                add_user_message(chat_id, msg.message_id)
+
+            buttons_msg = await bot.send_message(
+                chat_id=chat_id,
+                text="Выберите действие:",
+                reply_markup=get_product_keyboard(product.id, type_id, page)
+            )
+            add_user_message(chat_id, buttons_msg.message_id)
+        else:
             msg = await bot.send_message(
                 chat_id=chat_id,
                 text=product_text,
-                reply_markup=get_product_keyboard(product.id, product.type_id, page, 0, 0)
+                reply_markup=get_product_keyboard(product.id, type_id, page)
             )
             add_user_message(chat_id, msg.message_id)
-            return
-
-        # Получаем конкретный медиафайл по индексу
-        media_file = media_files[media_index]
-
-        product_text = f"🚪 {product.name}\n\n💰 Цена: {product.price} руб.\n\n📝 {product.description}"
-
-        # Отправляем медиафайл с кнопками навигации
-        if media_file.media_type == 'photo':
-            msg = await bot.send_photo(
-                chat_id=chat_id,
-                photo=media_file.file_id,
-                caption=product_text,
-                reply_markup=get_product_keyboard(product.id, type_id, page, media_index, len(media_files))
-            )
-        else:  # video
-            msg = await bot.send_video(
-                chat_id=chat_id,
-                video=media_file.file_id,
-                caption=product_text,
-                reply_markup=get_product_keyboard(product.id, type_id, page, media_index, len(media_files))
-            )
-
-        add_user_message(chat_id, msg.message_id)
 
     finally:
         db.close()
 
-
-# Обработчик навигации по медиа товара
-@dp.callback_query(ProductMediaNavigation.filter())
-async def handle_product_media_navigation(callback: types.CallbackQuery, callback_data: ProductMediaNavigation):
-    await show_product_media(callback, callback_data.product_id, callback_data.type_id, callback_data.page,
-                             callback_data.media_index)
-    await callback.answer()
-
-
-# Начало добавления товара в корзину - запрос количества
 @dp.callback_query(F.data.startswith("add_to_cart_"))
 async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     chat_id = callback.message.chat.id
@@ -626,7 +496,6 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("❌ Товар не найден")
             return
 
-        # Сохраняем информацию о товаре в состоянии
         await state.update_data(
             product_id=product_id,
             product_name=product.name,
@@ -635,7 +504,6 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
             page=page
         )
 
-        # Запрашиваем количество
         msg = await callback.message.answer(
             f"🚪 {product.name}\n"
             f"💰 Цена: {product.price} руб.\n\n"
@@ -651,8 +519,6 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
 
     await callback.answer()
 
-
-# Обработчик отмены ввода количества
 @dp.callback_query(F.data.startswith("cancel_quantity_"))
 async def cancel_quantity(callback: types.CallbackQuery, state: FSMContext):
     chat_id = callback.message.chat.id
@@ -665,8 +531,7 @@ async def cancel_quantity(callback: types.CallbackQuery, state: FSMContext):
     try:
         product = db.query(Product).filter(Product.id == product_id).first()
         if product:
-            # Возвращаемся к первому медиафайлу товара
-            await show_product_media(callback, product_id, type_id, page, 0)
+            await show_product_media(callback, product_id, type_id, page)
         else:
             await callback.answer("❌ Товар не найден")
     finally:
@@ -675,8 +540,6 @@ async def cancel_quantity(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
-
-# Обработчик ввода количества товара
 @dp.message(CartState.waiting_for_quantity, F.text)
 async def process_quantity(message: types.Message, state: FSMContext):
     chat_id = message.chat.id
@@ -710,7 +573,6 @@ async def process_quantity(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        # Проверяем, есть ли уже такой товар в корзине
         cart_item = db.query(Cart).filter(
             Cart.user_id == user_id,
             Cart.product_id == product_id
@@ -726,7 +588,6 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
         total_price = product_price * quantity
 
-        # Очищаем предыдущие сообщения и показываем подтверждение
         await cleanup_user_messages(chat_id)
 
         confirmation_msg = await message.answer(
@@ -746,14 +607,12 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-
-# Просмотр корзины с отдельными сообщениями для каждого товара
 @dp.callback_query(F.data == "view_cart")
 async def view_cart(callback: types.CallbackQuery):
     user_id = callback.from_user.id
     chat_id = callback.message.chat.id
 
-    await cleanup_user_messages(chat_id)  # Очищаем предыдущие сообщения
+    await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
     try:
@@ -766,14 +625,12 @@ async def view_cart(callback: types.CallbackQuery):
         total_amount = 0
         items_processed = 0
 
-        # Отправляем каждый товар отдельным сообщением
         for item in cart_items:
             product = db.query(Product).filter(Product.id == item.product_id).first()
             if product:
                 item_total = product.price * item.quantity
                 total_amount += item_total
 
-                # Получаем медиафайлы товара
                 media_files = db.query(ProductMedia).filter(ProductMedia.product_id == product.id).all()
 
                 item_text = (
@@ -783,7 +640,6 @@ async def view_cart(callback: types.CallbackQuery):
                 )
 
                 if media_files:
-                    # Отправляем первое фото товара
                     first_media = media_files[0]
                     if first_media.media_type == 'photo':
                         msg = await bot.send_photo(
@@ -800,7 +656,6 @@ async def view_cart(callback: types.CallbackQuery):
                             reply_markup=get_cart_item_keyboard(item.id)
                         )
                 else:
-                    # Если нет медиа, отправляем просто текст
                     msg = await bot.send_message(
                         chat_id=chat_id,
                         text=item_text,
@@ -810,7 +665,6 @@ async def view_cart(callback: types.CallbackQuery):
                 add_user_message(chat_id, msg.message_id)
                 items_processed += 1
 
-        # Отправляем итоговое сообщение с суммой
         summary_text = f"💰 Общая сумма заказа: {total_amount} руб.\n\n📦 Товаров в корзине: {items_processed}"
         summary_msg = await bot.send_message(
             chat_id=chat_id,
@@ -823,8 +677,6 @@ async def view_cart(callback: types.CallbackQuery):
         db.close()
     await callback.answer()
 
-
-# Удаление товара из корзины
 @dp.callback_query(F.data.startswith("remove_from_cart_"))
 async def remove_from_cart(callback: types.CallbackQuery):
     cart_item_id = int(callback.data.split("_")[3])
@@ -839,7 +691,6 @@ async def remove_from_cart(callback: types.CallbackQuery):
             db.delete(cart_item)
             db.commit()
 
-            # Удаляем сообщение с товаром
             try:
                 await callback.message.delete()
             except Exception as e:
@@ -847,7 +698,6 @@ async def remove_from_cart(callback: types.CallbackQuery):
 
             await callback.answer(f"✅ {product_name} удален из корзины")
 
-            # Обновляем вид корзины
             await view_cart(callback)
         else:
             await callback.answer("❌ Товар не найден в корзине")
@@ -857,8 +707,6 @@ async def remove_from_cart(callback: types.CallbackQuery):
     finally:
         db.close()
 
-
-# Очистка корзины
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -873,7 +721,6 @@ async def clear_cart(callback: types.CallbackQuery):
 
         await callback.answer("✅ Корзина очищена")
 
-        # Возвращаемся в меню корзины
         await show_cart_menu(callback)
 
     except Exception as e:
@@ -882,8 +729,6 @@ async def clear_cart(callback: types.CallbackQuery):
     finally:
         db.close()
 
-
-# Оформление заказа
 @dp.callback_query(F.data == "checkout")
 async def start_checkout(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
@@ -897,7 +742,6 @@ async def start_checkout(callback: types.CallbackQuery, state: FSMContext):
             await callback.answer("❌ Корзина пуста")
             return
 
-        # Сохраняем информацию о корзине в состоянии
         cart_data = []
         total_amount = 0
 
@@ -928,7 +772,6 @@ async def start_checkout(callback: types.CallbackQuery, state: FSMContext):
         db.close()
     await callback.answer()
 
-
 @dp.message(OrderState.waiting_for_phone, F.text)
 async def process_order(message: types.Message, state: FSMContext):
     phone_number = message.text.strip()
@@ -947,7 +790,6 @@ async def process_order(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        # Создаем заказ
         new_order = Order(
             user_id=user_id,
             user_name=user_name,
@@ -956,9 +798,8 @@ async def process_order(message: types.Message, state: FSMContext):
             created_at=datetime.now().strftime("%d.%m.%Y %H:%M")
         )
         db.add(new_order)
-        db.flush()  # Получаем ID заказа
+        db.flush()
 
-        # Добавляем товары заказа
         order_items_info = []
         for item_data in cart_data:
             order_item = OrderItem(
@@ -971,14 +812,12 @@ async def process_order(message: types.Message, state: FSMContext):
             db.add(order_item)
             order_items_info.append(item_data)
 
-        # Очищаем корзину
         cart_items = db.query(Cart).filter(Cart.user_id == user_id).all()
         for item in cart_items:
             db.delete(item)
 
         db.commit()
 
-        # Формируем сообщение для админа с медиа
         admin_text = (
             f"📦 Новый заказ #{new_order.id}\n\n"
             f"👤 Пользователь: {user_name} (ID: {user_id})\n"
@@ -990,12 +829,9 @@ async def process_order(message: types.Message, state: FSMContext):
         for item_info in order_items_info:
             admin_text += f"• {item_info['product_name']} - {item_info['price']} руб. x {item_info['quantity']}\n"
 
-        # Отправляем админу сначала текстовое сообщение
-        # Отправляем всем админам сначала текстовое сообщение
-        for admin_id in ADMIN_IDS:  # Было ADMIN_ID, стало ADMIN_IDS
+        for admin_id in ADMIN_IDS:
             await bot.send_message(admin_id, admin_text)
 
-        # Затем отправляем всем админам фотографии товаров из заказа
         for item_info in order_items_info:
             product_id = item_info['product_id']
             media_files = db.query(ProductMedia).filter(ProductMedia.product_id == product_id).all()
@@ -1009,7 +845,7 @@ async def process_order(message: types.Message, state: FSMContext):
                     f"👤 Имя: {user_name}"
                 )
 
-                for admin_id in ADMIN_IDS:  # Было ADMIN_ID, стало ADMIN_IDS
+                for admin_id in ADMIN_IDS:
                     if first_media.media_type == 'photo':
                         await bot.send_photo(
                             chat_id=admin_id,
@@ -1023,7 +859,6 @@ async def process_order(message: types.Message, state: FSMContext):
                             caption=item_caption
                         )
 
-        # Подтверждаем пользователю
         await message.answer(
             f"✅ Ваш заказ #{new_order.id} принят!\n\n"
             f"💰 Сумма заказа: {total_amount} руб.\n"
@@ -1031,7 +866,6 @@ async def process_order(message: types.Message, state: FSMContext):
             "Спасибо за покупку! 🚪"
         )
 
-        # Возвращаемся в главное меню
         await update_main_menu(chat_id,
                                "Добро пожаловать в магазин дверей! 🚪\n\nВыберите нужный раздел:",
                                get_start_keyboard()
@@ -1046,17 +880,13 @@ async def process_order(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
 
-    await cleanup_user_messages(chat_id)  # Очищаем все сообщения
+    await cleanup_user_messages(chat_id)
 
-    welcome_text = (
-        "Добро пожаловать в магазин дверей! 🚪\n\n"
-        "Выберите нужный раздел:"
-    )
+    welcome_text = "Добро пожаловать в магазин дверей! 🚪\n\nВыберите нужный раздел:"
 
     await update_main_menu(
         chat_id,
@@ -1065,20 +895,15 @@ async def back_to_main(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-
-# Запуск бота
 async def main():
-    # Создаем таблицы в БД и выполняем миграцию
     print("Инициализация базы данных...")
     create_tables()
     print("База данных готова")
 
-    # Даем время на завершение миграции
     await asyncio.sleep(1)
 
     print("Запуск бота...")
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
