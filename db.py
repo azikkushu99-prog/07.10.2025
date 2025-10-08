@@ -23,7 +23,8 @@ class ProductPagination(CallbackData, prefix="prod_pag"):
 
 # Создаем папки для медиа, если их нет
 os.makedirs("doors", exist_ok=True)
-os.makedirs("files", exist_ok=True)  # Новая папка для файлов главного меню
+os.makedirs("files", exist_ok=True)
+os.makedirs("location", exist_ok=True)  # Новая папка для локаций
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -58,7 +59,7 @@ class Product(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(200), nullable=False)
     description = Column(Text)
-    price = Column(Integer, nullable=False, default=0)  # Цена в рублях с значением по умолчанию
+    price = Column(Integer, nullable=False, default=0)
     type_id = Column(Integer, ForeignKey("types.id"))
 
     # Связи
@@ -71,14 +72,13 @@ class ProductMedia(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"))
-    file_id = Column(String(255))  # file_id от Telegram
-    file_path = Column(String(500))  # локальный путь к файлу
-    media_type = Column(String(10))  # 'photo' или 'video'
+    file_id = Column(String(255))
+    file_path = Column(String(500))
+    media_type = Column(String(10))
 
     product = relationship("Product", back_populates="media")
 
 
-# Таблица для корзины пользователей
 class Cart(Base):
     __tablename__ = "carts"
 
@@ -90,7 +90,6 @@ class Cart(Base):
     product = relationship("Product")
 
 
-# Таблица для заказов
 class Order(Base):
     __tablename__ = "orders"
 
@@ -117,30 +116,25 @@ class OrderItem(Base):
     order = relationship("Order")
 
 
-# Новая таблица для разделов главного меню
 class MainMenuSection(Base):
     __tablename__ = "main_menu_sections"
 
     id = Column(Integer, primary_key=True, index=True)
-    section_key = Column(String(50), unique=True, nullable=False)  # services, info, consultation
-    title = Column(String(100), nullable=False)  # Название раздела
-    content = Column(Text, default="")  # Содержимое раздела
-    photo_path = Column(String(500), nullable=True)  # Путь к фото
-    file_id = Column(String(255), nullable=True)  # file_id от Telegram
+    section_key = Column(String(50), unique=True, nullable=False)
+    title = Column(String(100), nullable=False)
+    content = Column(Text, default="")
+    photo_path = Column(String(500), nullable=True)
+    file_id = Column(String(255), nullable=True)
 
 
-# Создаем таблицы
 def create_tables():
     Base.metadata.create_all(bind=engine)
-    # Запускаем миграцию после создания таблиц
     migrate_database()
 
 
 def migrate_database():
-    """Добавляем отсутствующие столбцы и таблицы в существующую базу данных"""
     db = SessionLocal()
     try:
-        # Проверяем существование столбца price в таблице products
         result = db.execute(text("PRAGMA table_info(products)"))
         columns = [row[1] for row in result]
 
@@ -149,7 +143,6 @@ def migrate_database():
             db.execute(text("ALTER TABLE products ADD COLUMN price INTEGER NOT NULL DEFAULT 0"))
             print("Столбец price успешно добавлен")
 
-        # Проверяем существование таблицы main_menu_sections
         result = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='main_menu_sections'"))
         table_exists = result.fetchone()
 
@@ -158,7 +151,6 @@ def migrate_database():
             MainMenuSection.__table__.create(engine)
             print("Таблица main_menu_sections успешно создана")
 
-        # Проверяем и создаем начальные записи для разделов главного меню
         create_initial_sections(db)
         db.commit()
 
@@ -170,7 +162,6 @@ def migrate_database():
 
 
 def create_initial_sections(db):
-    """Создает начальные записи для разделов главного меню"""
     sections_data = [
         {
             'section_key': 'services',
@@ -190,7 +181,6 @@ def create_initial_sections(db):
     ]
 
     for section_data in sections_data:
-        # Проверяем, существует ли уже раздел
         existing_section = db.query(MainMenuSection).filter(
             MainMenuSection.section_key == section_data['section_key']
         ).first()
