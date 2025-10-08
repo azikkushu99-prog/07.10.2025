@@ -8,12 +8,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters.callback_data import CallbackData
 import asyncio
 import logging
+import os
 from datetime import datetime
 import math
 
 from config import BOT_TOKEN, ADMIN_IDS
-from db import create_tables, SessionLocal, Category, Type, Product, ProductMedia, Cart, Order, OrderItem, MainMenuSection
+from db import create_tables, SessionLocal, Category, Type, Product, ProductMedia, Cart, Order, OrderItem, \
+    MainMenuSection
 from admin import admin_router
+from aiogram.types import FSInputFile
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,25 +27,32 @@ dp.include_router(admin_router)
 
 ITEMS_PER_PAGE = 10
 
+
 class CategoryPagination(CallbackData, prefix="cat_pag"):
     page: int
+
 
 class TypePagination(CallbackData, prefix="type_pag"):
     category_id: int
     page: int
 
+
 class ProductPagination(CallbackData, prefix="prod_pag"):
     type_id: int
     page: int
 
+
 class OrderState(StatesGroup):
     waiting_for_phone = State()
+
 
 class CartState(StatesGroup):
     waiting_for_quantity = State()
 
+
 main_menu_messages = {}
 user_last_messages = {}
+
 
 async def cleanup_user_messages(chat_id: int, keep_main_menu: bool = True):
     if chat_id in user_last_messages:
@@ -60,10 +70,12 @@ async def cleanup_user_messages(chat_id: int, keep_main_menu: bool = True):
             logger.debug(f"Не удалось удалить главное меню: {e}")
         del main_menu_messages[chat_id]
 
+
 def add_user_message(chat_id: int, message_id: int):
     if chat_id not in user_last_messages:
         user_last_messages[chat_id] = []
     user_last_messages[chat_id].append(message_id)
+
 
 async def update_main_menu(chat_id: int, text: str, reply_markup):
     if chat_id in main_menu_messages:
@@ -84,15 +96,18 @@ async def update_main_menu(chat_id: int, text: str, reply_markup):
             del main_menu_messages[chat_id]
     return False
 
+
 def get_start_keyboard():
     keyboard = [
         [InlineKeyboardButton(text="📁 Каталог", callback_data="catalog"),
          InlineKeyboardButton(text="🛠️ Услуги", callback_data="services")],
         [InlineKeyboardButton(text="ℹ️ Информация", callback_data="info"),
          InlineKeyboardButton(text="💬 Консультация", callback_data="consultation")],
-        [InlineKeyboardButton(text="🛒 Корзина", callback_data="cart")]
+        [InlineKeyboardButton(text="🛒 Корзина", callback_data="cart"),
+         InlineKeyboardButton(text="📍 Локация", callback_data="location")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 def get_cart_keyboard():
     keyboard = [
@@ -102,6 +117,7 @@ def get_cart_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def get_product_keyboard(product_id, type_id, page=0):
     keyboard = [
         [InlineKeyboardButton(text="🛒 Добавить в корзину", callback_data=f"add_to_cart_{product_id}_{page}")],
@@ -109,18 +125,22 @@ def get_product_keyboard(product_id, type_id, page=0):
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def get_after_cart_keyboard(type_id, page=0):
     keyboard = [
-        [InlineKeyboardButton(text="🔙 Назад к товарам", callback_data=f"back_to_products_{type_id}_{page}")],
+        [InlineKeyboardButton(text="🔙 Назад к товарам", callback_data=f"back_to_products_{type_id}_{page}"),
+         InlineKeyboardButton(text="🛒 В корзину", callback_data="cart")],
         [InlineKeyboardButton(text="🏠 В главное меню", callback_data="back_to_main")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 def get_cancel_quantity_keyboard(product_id, type_id, page=0):
     keyboard = [
         [InlineKeyboardButton(text="❌ Отменить", callback_data=f"cancel_quantity_{product_id}_{type_id}_{page}")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 def get_cart_summary_keyboard():
     keyboard = [
@@ -130,12 +150,14 @@ def get_cart_summary_keyboard():
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
+
 def get_cart_item_keyboard(cart_item_id):
     keyboard = [
         [InlineKeyboardButton(text="❌ Удалить из корзины", callback_data=f"remove_from_cart_{cart_item_id}")],
         [InlineKeyboardButton(text="🔄 Обновить корзину", callback_data="view_cart")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -147,7 +169,8 @@ async def cmd_start(message: types.Message):
     msg = await message.answer(welcome_text, reply_markup=get_start_keyboard())
     main_menu_messages[chat_id] = msg.message_id
 
-@dp.callback_query(F.data.in_(["catalog", "services", "info", "consultation", "cart"]))
+
+@dp.callback_query(F.data.in_(["catalog", "services", "info", "consultation", "cart", "location"]))
 async def handle_callbacks(callback: types.CallbackQuery):
     data = callback.data
     chat_id = callback.message.chat.id
@@ -163,6 +186,9 @@ async def handle_callbacks(callback: types.CallbackQuery):
         await show_main_menu_section(callback, "consultation")
     elif data == "cart":
         await show_cart_menu(callback)
+    elif data == "location":
+        await show_location(callback)
+
 
 async def show_main_menu_section(callback: types.CallbackQuery, section_key: str):
     chat_id = callback.message.chat.id
@@ -178,21 +204,32 @@ async def show_main_menu_section(callback: types.CallbackQuery, section_key: str
                 main_menu_messages[chat_id] = msg.message_id
             return
 
+        # Для разделов с фото отправляем новое сообщение и обновляем главное меню
         if section.file_id and section.photo_path:
             try:
+                # Удаляем текущее главное меню
+                if chat_id in main_menu_messages:
+                    try:
+                        await bot.delete_message(chat_id=chat_id, message_id=main_menu_messages[chat_id])
+                    except Exception as e:
+                        logger.debug(f"Не удалось удалить главное меню: {e}")
+                    del main_menu_messages[chat_id]
+
+                # Отправляем фото как новое главное меню
                 msg = await bot.send_photo(
                     chat_id=chat_id,
                     photo=section.file_id,
                     caption=section.content,
                     reply_markup=get_start_keyboard()
                 )
-                add_user_message(chat_id, msg.message_id)
+                main_menu_messages[chat_id] = msg.message_id
             except Exception as e:
                 logger.error(f"Ошибка отправки фото: {e}")
                 if not await update_main_menu(chat_id, section.content, get_start_keyboard()):
                     msg = await callback.message.answer(section.content, reply_markup=get_start_keyboard())
                     main_menu_messages[chat_id] = msg.message_id
         else:
+            # Для текстовых разделов просто обновляем существующее меню
             if not await update_main_menu(chat_id, section.content, get_start_keyboard()):
                 msg = await callback.message.answer(section.content, reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
@@ -206,10 +243,12 @@ async def show_main_menu_section(callback: types.CallbackQuery, section_key: str
     finally:
         db.close()
 
+
 @dp.callback_query(F.data == "cart")
 async def handle_cart(callback: types.CallbackQuery):
     await show_cart_menu(callback)
     await callback.answer()
+
 
 async def show_cart_menu(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -217,6 +256,7 @@ async def show_cart_menu(callback: types.CallbackQuery):
     if not await update_main_menu(chat_id, "🛒 Корзина\n\nВыберите действие:", get_cart_keyboard()):
         msg = await callback.message.answer("🛒 Корзина\n\nВыберите действие:", reply_markup=get_cart_keyboard())
         main_menu_messages[chat_id] = msg.message_id
+
 
 async def show_catalog(callback: types.CallbackQuery, page: int = 0):
     chat_id = callback.message.chat.id
@@ -268,16 +308,19 @@ async def show_catalog(callback: types.CallbackQuery, page: int = 0):
     finally:
         db.close()
 
+
 @dp.callback_query(CategoryPagination.filter())
 async def handle_category_pagination(callback: types.CallbackQuery, callback_data: CategoryPagination):
     await show_catalog(callback, callback_data.page)
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("show_category_"))
 async def show_category_types(callback: types.CallbackQuery):
     category_id = int(callback.data.split("_")[2])
     await show_category_types_page(callback, category_id, 0)
     await callback.answer()
+
 
 async def show_category_types_page(callback: types.CallbackQuery, category_id: int, page: int = 0):
     chat_id = callback.message.chat.id
@@ -289,8 +332,10 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
         types = db.query(Type).filter(Type.category_id == category_id).all()
 
         if not types:
-            if not await update_main_menu(chat_id, f"📁 В категории '{category.name}' пока нет типов", get_start_keyboard()):
-                msg = await callback.message.answer(f"📁 В категории '{category.name}' пока нет типов", reply_markup=get_start_keyboard())
+            if not await update_main_menu(chat_id, f"📁 В категории '{category.name}' пока нет типов",
+                                          get_start_keyboard()):
+                msg = await callback.message.answer(f"📁 В категории '{category.name}' пока нет типов",
+                                                    reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
             return
 
@@ -331,10 +376,12 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
     finally:
         db.close()
 
+
 @dp.callback_query(TypePagination.filter())
 async def handle_type_pagination(callback: types.CallbackQuery, callback_data: TypePagination):
     await show_category_types_page(callback, callback_data.category_id, callback_data.page)
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("show_type_"))
 async def show_type_products(callback: types.CallbackQuery):
@@ -343,6 +390,7 @@ async def show_type_products(callback: types.CallbackQuery):
     page = int(parts[3]) if len(parts) > 3 else 0
     await show_type_products_page(callback, type_id, page)
     await callback.answer()
+
 
 async def show_type_products_page(callback: types.CallbackQuery, type_id: int, page: int = 0):
     chat_id = callback.message.chat.id
@@ -354,8 +402,10 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
         products = db.query(Product).filter(Product.type_id == type_id).all()
 
         if not products:
-            if not await update_main_menu(chat_id, f"🚪 В типе '{type_obj.name}' пока нет товаров", get_start_keyboard()):
-                msg = await callback.message.answer(f"🚪 В типе '{type_obj.name}' пока нет товаров", reply_markup=get_start_keyboard())
+            if not await update_main_menu(chat_id, f"🚪 В типе '{type_obj.name}' пока нет товаров",
+                                          get_start_keyboard()):
+                msg = await callback.message.answer(f"🚪 В типе '{type_obj.name}' пока нет товаров",
+                                                    reply_markup=get_start_keyboard())
                 main_menu_messages[chat_id] = msg.message_id
             return
 
@@ -396,10 +446,12 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
     finally:
         db.close()
 
+
 @dp.callback_query(ProductPagination.filter())
 async def handle_product_pagination(callback: types.CallbackQuery, callback_data: ProductPagination):
     await show_type_products_page(callback, callback_data.type_id, callback_data.page)
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("back_to_products_"))
 async def back_to_products(callback: types.CallbackQuery):
@@ -411,6 +463,7 @@ async def back_to_products(callback: types.CallbackQuery):
     await show_type_products_page(callback, type_id, page)
     await callback.answer()
 
+
 @dp.callback_query(F.data.startswith("show_product_"))
 async def show_product_details(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -421,6 +474,7 @@ async def show_product_details(callback: types.CallbackQuery):
 
     await show_product_media(callback, product_id, type_id, page)
     await callback.answer()
+
 
 async def show_product_media(callback: types.CallbackQuery, product_id: int, type_id: int, page: int):
     chat_id = callback.message.chat.id
@@ -482,6 +536,7 @@ async def show_product_media(callback: types.CallbackQuery, product_id: int, typ
     finally:
         db.close()
 
+
 @dp.callback_query(F.data.startswith("add_to_cart_"))
 async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
     chat_id = callback.message.chat.id
@@ -507,7 +562,8 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
         msg = await callback.message.answer(
             f"🚪 {product.name}\n"
             f"💰 Цена: {product.price} руб.\n\n"
-            "📝 Введите количество товара:",
+            "<b>📝 Введите количество товара:</b>",
+            parse_mode="HTML",
             reply_markup=get_cancel_quantity_keyboard(product_id, product.type_id, page)
         )
         add_user_message(chat_id, msg.message_id)
@@ -518,6 +574,7 @@ async def start_add_to_cart(callback: types.CallbackQuery, state: FSMContext):
         db.close()
 
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("cancel_quantity_"))
 async def cancel_quantity(callback: types.CallbackQuery, state: FSMContext):
@@ -539,6 +596,7 @@ async def cancel_quantity(callback: types.CallbackQuery, state: FSMContext):
 
     await state.clear()
     await callback.answer()
+
 
 @dp.message(CartState.waiting_for_quantity, F.text)
 async def process_quantity(message: types.Message, state: FSMContext):
@@ -588,15 +646,11 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
         total_price = product_price * quantity
 
+        # Удаляем все предыдущие сообщения, включая сообщение о добавлении в корзину
         await cleanup_user_messages(chat_id)
 
-        confirmation_msg = await message.answer(
-            f"✅ {product.name} добавлен в корзину!\n"
-            f"📦 Количество: {quantity} шт.\n"
-            f"💰 Сумма: {total_price} руб.",
-            reply_markup=get_after_cart_keyboard(type_id, page)
-        )
-        add_user_message(chat_id, confirmation_msg.message_id)
+        # Сразу показываем корзину вместо сообщения подтверждения
+        await view_cart_from_handler(chat_id, user_id)
 
     except Exception as e:
         db.rollback()
@@ -607,11 +661,9 @@ async def process_quantity(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-@dp.callback_query(F.data == "view_cart")
-async def view_cart(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    chat_id = callback.message.chat.id
 
+async def view_cart_from_handler(chat_id: int, user_id: int):
+    """Функция для отображения корзины из обработчиков"""
     await cleanup_user_messages(chat_id)
 
     db = SessionLocal()
@@ -619,7 +671,7 @@ async def view_cart(callback: types.CallbackQuery):
         cart_items = db.query(Cart).filter(Cart.user_id == user_id).all()
 
         if not cart_items:
-            await callback.answer("🛒 Ваша корзина пуста")
+            await bot.send_message(chat_id, "🛒 Ваша корзина пуста")
             return
 
         total_amount = 0
@@ -675,7 +727,16 @@ async def view_cart(callback: types.CallbackQuery):
 
     finally:
         db.close()
+
+
+@dp.callback_query(F.data == "view_cart")
+async def view_cart(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    chat_id = callback.message.chat.id
+
+    await view_cart_from_handler(chat_id, user_id)
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("remove_from_cart_"))
 async def remove_from_cart(callback: types.CallbackQuery):
@@ -707,6 +768,7 @@ async def remove_from_cart(callback: types.CallbackQuery):
     finally:
         db.close()
 
+
 @dp.callback_query(F.data == "clear_cart")
 async def clear_cart(callback: types.CallbackQuery):
     user_id = callback.from_user.id
@@ -728,6 +790,7 @@ async def clear_cart(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка при очистке корзины")
     finally:
         db.close()
+
 
 @dp.callback_query(F.data == "checkout")
 async def start_checkout(callback: types.CallbackQuery, state: FSMContext):
@@ -771,6 +834,7 @@ async def start_checkout(callback: types.CallbackQuery, state: FSMContext):
     finally:
         db.close()
     await callback.answer()
+
 
 @dp.message(OrderState.waiting_for_phone, F.text)
 async def process_order(message: types.Message, state: FSMContext):
@@ -880,6 +944,54 @@ async def process_order(message: types.Message, state: FSMContext):
 
     await state.clear()
 
+
+
+
+
+async def show_location(callback: types.CallbackQuery):
+    chat_id = callback.message.chat.id
+    await cleanup_user_messages(chat_id)
+
+    try:
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        photo_path = os.path.join(current_dir, "location", "photo_2025-10-07_14-26-15.jpg")
+
+        if os.path.exists(photo_path):
+            photo = FSInputFile(photo_path)
+
+            # Удаляем главное меню и отправляем новое сообщение с фото
+            if chat_id in main_menu_messages:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=main_menu_messages[chat_id])
+                except Exception as e:
+                    logger.debug(f"Не удалось удалить главное меню: {e}")
+                del main_menu_messages[chat_id]
+
+            # Отправляем фото и запоминаем как новое главное меню
+            msg = await bot.send_photo(
+                chat_id=chat_id,
+                photo=photo,
+                caption="📍 Наш магазин находится по этому адресу. Ждем вас!",
+                reply_markup=get_start_keyboard()
+            )
+            main_menu_messages[chat_id] = msg.message_id
+        else:
+            logger.error(f"Файл не найден: {photo_path}")
+            if not await update_main_menu(chat_id, "❌ Фото локации временно недоступно", get_start_keyboard()):
+                msg = await callback.message.answer("❌ Фото локации временно недоступно",
+                                                    reply_markup=get_start_keyboard())
+                main_menu_messages[chat_id] = msg.message_id
+
+    except Exception as e:
+        logger.error(f"Ошибка отправки фото локации: {e}")
+        if not await update_main_menu(chat_id, "❌ Произошла ошибка при загрузке локации", get_start_keyboard()):
+            msg = await callback.message.answer("❌ Произошла ошибка при загрузке локации",
+                                                reply_markup=get_start_keyboard())
+            main_menu_messages[chat_id] = msg.message_id
+
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
@@ -895,6 +1007,7 @@ async def back_to_main(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+
 async def main():
     print("Инициализация базы данных...")
     create_tables()
@@ -904,6 +1017,7 @@ async def main():
 
     print("Запуск бота...")
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
