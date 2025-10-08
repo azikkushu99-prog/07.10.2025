@@ -971,7 +971,7 @@ async def show_location(callback: types.CallbackQuery):
             msg = await bot.send_photo(
                 chat_id=chat_id,
                 photo=photo,
-                caption="📍 Наш магазин находится по этому адресу. Ждем вас!",
+                caption="📍 📍 г. Пятигорск, Кисловодское шоссе, 36/10. https://yandex.ru/maps/org/tsar_dverey/62668851871?si=63pvv671uy2y6q9benbwcb7a4g",
                 reply_markup=get_start_keyboard()
             )
             main_menu_messages[chat_id] = msg.message_id
@@ -1021,3 +1021,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
