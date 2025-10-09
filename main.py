@@ -264,7 +264,8 @@ async def show_catalog(callback: types.CallbackQuery, page: int = 0):
 
     db = SessionLocal()
     try:
-        categories = db.query(Category).all()
+        # ИЗМЕНЕНО: Добавлена сортировка по имени категории
+        categories = db.query(Category).order_by(Category.name).all()
         if not categories:
             if not await update_main_menu(chat_id, "📁 Каталог пока пуст", get_start_keyboard()):
                 msg = await callback.message.answer("📁 Каталог пока пуст", reply_markup=get_start_keyboard())
@@ -329,7 +330,8 @@ async def show_category_types_page(callback: types.CallbackQuery, category_id: i
     db = SessionLocal()
     try:
         category = db.query(Category).filter(Category.id == category_id).first()
-        types = db.query(Type).filter(Type.category_id == category_id).all()
+        # ИЗМЕНЕНО: Добавлена сортировка по имени типа
+        types = db.query(Type).filter(Type.category_id == category_id).order_by(Type.name).all()
 
         if not types:
             if not await update_main_menu(chat_id, f"📁 В категории '{category.name}' пока нет типов",
@@ -399,7 +401,8 @@ async def show_type_products_page(callback: types.CallbackQuery, type_id: int, p
     db = SessionLocal()
     try:
         type_obj = db.query(Type).filter(Type.id == type_id).first()
-        products = db.query(Product).filter(Product.type_id == type_id).all()
+        # ИЗМЕНЕНО: Добавлена сортировка по имени товара
+        products = db.query(Product).filter(Product.type_id == type_id).order_by(Product.name).all()
 
         if not products:
             if not await update_main_menu(chat_id, f"🚪 В типе '{type_obj.name}' пока нет товаров",
@@ -1021,4 +1024,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
